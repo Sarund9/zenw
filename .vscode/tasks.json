@@ -4,7 +4,7 @@
         {
             "label": "build",
             "type": "shell",
-            "command": "odin build src -out:zenw.exe",
+            "command": "odin build src/ -out:zenw.exe",
             "group": {
                 "kind": "build",
                 "isDefault": true

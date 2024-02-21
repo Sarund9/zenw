@@ -7,18 +7,24 @@ import "core:os"
 import str "core:strings"
 import "core:log"
 import "core:runtime"
-import path "core:path/filepath"
+// import path "core:path/filepath/."
+
+// import core "core:."
 
 
 Args :: struct {
     task: [dynamic]string,
 }
 
+appState: struct {
+    workspace: string,
+}
+
 main :: proc() {
     context.logger = log.create_console_logger(
         lowest = .Info,
         opt = log.Options {
-            .Level,
+            .Level, .Terminal_Color,
         },
     )
     
@@ -38,7 +44,12 @@ main :: proc() {
 
     init(L)
 
-    workDir := os.args[0]
+    using appState
+
+    workspace = os.get_current_directory(context.allocator)
+    defer delete(workspace)
+    log.info("Workspace:", workspace)
+
 
     sfile: cstring = "zenw.lua"
 
