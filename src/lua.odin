@@ -37,8 +37,7 @@ Key in the ZENW registry table {
 REGISTRY_KEY    :: "ZENW"
 CONTEXT         :: "context"
 STD             :: "STD"
-LOADED_MODULES  :: "LOADED_MODULES"
-MOD_META        :: "MOD_META"
+WORKSPACES      :: "WORKSPACES"
 
 
 init :: proc(L: State) {
@@ -63,7 +62,7 @@ init :: proc(L: State) {
         setfield(L, -2, STD)
         getfield(L, -1, STD) // {zenw} {std}
     
-        mod_glob(L) // Declare global methods
+        mod_interop(L)
         mod_log(L)  // 
 
         // Create 
@@ -105,22 +104,8 @@ init :: proc(L: State) {
     // dumpstack(L)
 
     // Loaded Modules and ModInfo tables
-    {
-        newtable(L)
-        setfield(L, -2, LOADED_MODULES)
-        newtable(L)
-        setfield(L, -2, MOD_META)
-    }
-    // log.info("Lua Registry:")
-    // dumpregistry(L)
-
-    // log.info("Global Metatable:")
-    // // Check the global table's MetaTable
-    // {
-    //     pushglobaltable(L)
-    //     getmetatable(L, -1) // {glob}->@
-    //     dumptable(L, -1, 1)
-    // }
+    newtable(L)
+    setfield(L, -2, WORKSPACES)
 }
 
 dofile :: proc(L: State, path: cstring) {
@@ -159,7 +144,8 @@ dofile :: proc(L: State, path: cstring) {
         dumpstack(L)
         return
     }
-
+    // log.info("Workspace call success:")
+    // dumpstack(L)
 }
 
 startfunc :: proc "c" (L: State) -> runtime.Context {
@@ -210,22 +196,29 @@ throw_raw :: proc(L: State) -> ! {
 // Expects a table (STD) at the stack, sets global functions
 mod_glob :: proc(L: State) {
     
+    @static LOADING: u8
     /*
     after include and using find a valid file to load, and that it wasn't loaded, they call this function.
     it will load and execute the file.
     it expects to be called from lua (does not set the odin context)
-    the loaded module is added to ZENW.LOADED_MODULES, and pushed to the stack.
+    the loaded module is added to ZENW.WORKSPACES, and pushed to the stack.
     If loading the module yields an error, the function will return false
     */
     exec_file :: proc(L: State, filepath: cstring) -> bool {
         using lua
         
+
+        pushlightuserdata(L, &LOADING)
+        setfield(L, -2, filepath)       // work[filepath] = nil
+        // -> {zenw} {work}
+
         loadStatus := lua.L_loadfile(L, filepath)
         if loadStatus != .OK {
             /* %s lua string %f lua number %I lua integer %p pointer
             %d c.int %c c.int one byte %U c.long as UTF-8 */
+            // TODO: Wrap Errors
             lua.pushfstring(L, "Cannot load file %s", filepath)
-            throw(L)
+            return false
         }
 
         getfield(L, REGISTRYINDEX, REGISTRY_KEY) // .. bin {zenw}
@@ -247,12 +240,17 @@ mod_glob :: proc(L: State) {
 
         if runStatus != .OK {
             // log.error("SubExec call failed:", runStatus)
-            dumpstack(L)
-            msg := fmt.ctprintf("SubExec call failed: {}", runStatus)
-            
-            lua.pushstring(L, msg)
-            throw(L)
+            // dumpstack(L)
+            // msg := fmt.ctprintf("SubExec call failed: {}", runStatus)
+            // lua.pushstring(L, msg)
+            // TODO: Wrap Errors
+            return false
         }
+
+        // Add the module to ZENW.WORKSPACES
+        //             from before: // {zenw} {work} <- {env}
+        pushvalue(L, -1)            // {zenw} {work} {env} {env}
+        setfield(L, -3, filepath)   // {zenw} {work} {env}
 
         return true
     }
@@ -263,27 +261,75 @@ mod_glob :: proc(L: State) {
         using lua, appState
         
         strlen: uint
-        relpath := L_checkstring(L, 1, &strlen)
-        /* path should be relative to the current workspace
-           it should be inside said workspace
+        arg := L_checkstring(L, 1, &strlen)
+        /* path should be relative to the current workspace or file
+           it should be inside the current workspace
         */
-        fullpath := path.join({ workspace, string(relpath) }, context.temp_allocator)
+        literalpath := str.concatenate({string(arg), ".lua"}, context.temp_allocator)
+
+        
+
+
+        assert(false, "Not Implemented")
+
+        fullpath := path.join({ "", string(arg) }, context.temp_allocator)
         fullpath_c := str.clone_to_cstring(fullpath, context.temp_allocator)
 
         if !os.exists(fullpath) {
-            lua.pushfstring(L, "Cannot include file '%s'. File not found!", relpath)
+            lua.pushfstring(L, "Cannot include file '%s', as", arg)
             throw(L)
         }
 
         // TODO: Ensure that 'fullpath' is contained in workspace
 
+        // path.dir()
+
+        // check that fullpath is not the workspace file
+        filename := path.base(auto_cast arg)
+        if filename == "zenw.lua" {
+            lua.pushfstring(L, "Cannot include ", arg)
+            throw(L)
+        }
+
         // 
         {
 
         }
-        // log.warn("Include Success:", fullpath)
-        ok := exec_file(L, fullpath_c)
+        
+        getfield(L, REGISTRYINDEX, REGISTRY_KEY)    // .. {zenw}
+        getfield(L, -1, WORKSPACES)     // .. {zenw} {work}
 
+        // Check that the Workspace is not already loaded
+        {
+            ftype := getfield(L, -1, fullpath_c)     // .. {zenw} {work}
+            #partial switch Type(ftype) {
+            case .TABLE:
+                pushfstring(L, "Error: repeated include: %s", fullpath_c)
+                throw(L)
+            case .NIL: // 
+                pop(L, 1)       // Pops nil from the stack
+                ok := exec_file(L, fullpath_c)
+                insert(L, -4)   // Insert result back to the beginning
+                pop(L, 3)       // Pop all other elements from the stack
+        
+                if !ok {
+                    throw(L)
+                }
+                return 1
+            case .LIGHTUSERDATA:
+
+                pushfstring(L, "Error: cyclic dependency on include: %s", fullpath_c)
+                throw(L)
+            case:
+                panic("Something has gone wrong...")
+            }
+            
+        }
+        
+        ok := exec_file(L, fullpath_c)
+        if !ok {
+            throw(L)
+        }
         return 1
     })
     
@@ -297,7 +343,137 @@ mod_glob :: proc(L: State) {
     })
 }
 
-// Generates the Log table and pushes it to the stack
+// Generates the global import/export/include functions
+mod_interop :: proc(L: State) {
+    
+    // Standart 'export'
+    defun(L, "export", proc "c" (L: ^lua.State) -> i32 {
+        context = startfunc(L)
+        using lua
+        
+        strlen: uint
+        cstr := L_checkstring(L, 1, &strlen)
+        // TODO: Discard extra arguments ??
+        pop(L, 1)
+
+        ok := export_script(str.clone_from_cstring(cstr, context.temp_allocator))
+        if !ok {
+            pushfstring(L, "Cannot export '%s', file not found", cstr)
+            throw(L)
+        }
+
+        return 0
+    })
+
+    @static LOADING: u8
+
+    exec_file :: proc(L: State, filepath: cstring) -> bool {
+        using lua
+        
+
+        pushlightuserdata(L, &LOADING)
+        setfield(L, -2, filepath)       // work[filepath] = nil
+        // -> {zenw} {work}
+
+        loadStatus := lua.L_loadfile(L, filepath)
+        if loadStatus != .OK {
+            /* %s lua string %f lua number %I lua integer %p pointer
+            %d c.int %c c.int one byte %U c.long as UTF-8 */
+            // TODO: Wrap Errors
+            lua.pushfstring(L, "Cannot load file %s", filepath)
+            return false
+        }
+
+        getfield(L, REGISTRYINDEX, REGISTRY_KEY) // .. bin {zenw}
+        getfield(L, -1, STD)        // .. bin {zenw} {std}
+        newtable(L)                 // .. bin {zenw} {std} {env}
+        
+        insert(L, -2)               // .. bin {zenw} {env} {std}
+        setmetatable(L, -2)         // .. bin {zenw} {env(std)}
+        
+        insert(L, -3)               // .. {env} bin {zenw}
+        pop(L, 1)                   // .. {env} bin
+        
+        pushvalue(L, -2)            // .. {env} chunk {env}
+        setupvalue(L, -2, 1)        // .. {env} chunk
+        
+        runStatus := cast(lua.Status) pcall(L, 0, 0, 0)
+
+        // TODO: Yield handling
+
+        if runStatus != .OK {
+            // log.error("SubExec call failed:", runStatus)
+            // dumpstack(L)
+            // msg := fmt.ctprintf("SubExec call failed: {}", runStatus)
+            // lua.pushstring(L, msg)
+            // TODO: Wrap Errors
+            return false
+        }
+
+        // Add the module to ZENW.WORKSPACES
+        //             from before: // {zenw} {work} <- {env}
+        pushvalue(L, -1)            // {zenw} {work} {env} {env}
+        setfield(L, -3, filepath)   // {zenw} {work} {env}
+
+        return true
+    }
+
+    // Standart 'import'
+    defun(L, "import", proc "c" (L: ^lua.State) -> i32 {
+        context = startfunc(L)
+        using lua
+        strlen: uint
+        cstr := L_checkstring(L, 1, &strlen)
+        // TODO: Discard extra arguments ??
+        // pop(L, 1)
+
+        fullpath := import_script(str.clone_from_cstring(cstr, context.temp_allocator))
+        if fullpath == nil {
+            pushfstring(L, "Error: unknown import: %s", cstr)
+            throw(L)
+        }
+
+        fullpath_c := str.clone_to_cstring(fullpath.(string), context.temp_allocator)
+
+        getfield(L, REGISTRYINDEX, REGISTRY_KEY)    // .. {zenw}
+        getfield(L, -1, WORKSPACES)     // .. {zenw} {work}
+        // Check that the Workspace is not already loaded
+        {
+            ftype := getfield(L, -1, fullpath_c)     // .. {zenw} {work}
+            #partial switch Type(ftype) {
+            case .TABLE:
+                pushfstring(L, "Error: repeated include: %s", fullpath_c)
+                throw(L)
+            case .NIL: // 
+                pop(L, 1)       // Pops nil from the stack
+                ok := exec_file(L, fullpath_c)
+                insert(L, -4)   // Insert result back to the beginning
+                pop(L, 3)       // Pop all other elements from the stack
+
+                if !ok {
+                    throw(L)
+                }
+                return 1
+            case .LIGHTUSERDATA:
+
+                pushfstring(L, "Error: cyclic dependency on include: %s", fullpath_c)
+                throw(L)
+            case:
+                panic("Something has gone wrong...")
+            }
+            
+        }
+
+
+        dumpstack(L)
+        assert(false, "IMPORT")
+        return 0
+    })
+
+    // TODO: include for simplicity
+}
+
+// Generates the Log module.
 mod_log :: proc(L: State) {
     using lua
     

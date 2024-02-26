@@ -7,17 +7,12 @@ import "core:os"
 import str "core:strings"
 import "core:log"
 import "core:runtime"
-// import path "core:path/filepath/."
 
-// import core "core:."
+
 
 
 Args :: struct {
     task: [dynamic]string,
-}
-
-appState: struct {
-    workspace: string,
 }
 
 main :: proc() {
@@ -44,13 +39,6 @@ main :: proc() {
 
     init(L)
 
-    using appState
-
-    workspace = os.get_current_directory(context.allocator)
-    defer delete(workspace)
-    log.info("Workspace:", workspace)
-
-
     sfile: cstring = "zenw.lua"
 
     if !os.exists(auto_cast sfile) {
@@ -58,7 +46,36 @@ main :: proc() {
         return
     }
 
-    log.info("Run file:", sfile)
+
+    // Container :: struct {
+    //     table: map[string]string,
+    // }
+
+    // list: [dynamic]Container
+
+    // list = make([dynamic]Container, 0, 16)
+
+    // append(&list, Container {
+    //     table = make(map[string]string),
+    // })
+
+    // list[0].table["foo"] = "value"
+
+    // log.info(list)
+
+    // check(list[0].table, "foo")
+
+    init_workspace()
+    defer deinit_workspace()
+
     dofile(L, sfile)
+    
+    // export_script("zenw_test")
+    // test()
+
+    // log.info("Exportables:", appState.loadstack[0].exports)
+
+    // check(appState.loadstack[0].exports, "zenw_test")
+
 }
 
