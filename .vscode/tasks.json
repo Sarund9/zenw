@@ -4,19 +4,12 @@
         {
             "label": "build",
             "type": "shell",
-            "command": "odin build src/ -out:zenw.exe",
+            "options": {
+                "cwd": "test"
+            },
+            "command": "./../bin/zenw.sh test",
             "group": {
                 "kind": "build",
-                "isDefault": true
-            }
-        },
-        {
-            "label": "test",
-            "type": "shell",
-            "command": "./zenw.exe test",
-            "dependsOn": ["build"],
-            "group": {
-                "kind": "test",
                 "isDefault": true
             }
         }
