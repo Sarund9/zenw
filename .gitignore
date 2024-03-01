@@ -1,12 +1,12 @@
 
 
-# build output & test script
-zenw.*
-
 # user things
 usernotes
 ols.json
-zenw_test.lua
 
 # unvendored dependencies
 lua54.dll
+
+# build output
+zenw.exe
+zenw.obj
