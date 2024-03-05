@@ -13,16 +13,21 @@ import path "core:path/filepath"
 
 
 State :: ^lua.State
+StateRef :: State
 CFunc  :: lua.CFunction
 
 Exp :: lua.L_Reg
 
 
+// Not defined in "vendor:lua" for some reason
+upvalueindex :: proc "c" (index: i32) -> i32 {
+    return lua.REGISTRYINDEX - index
+}
 
 // Expects at table from the stack, sets a CFunction
-defun :: proc "c" (L: State, name: cstring, func: CFunc) {
+defun :: proc "c" (L: State, name: cstring, func: CFunc, upvalues := i32(0)) {
     using lua
-    pushcfunction(L, func)
+    pushcclosure(L, func, upvalues)
     setfield(L, -2, name)
 }
 
@@ -86,27 +91,12 @@ var_assert :: proc(L: State, var: Variant, $T: typeid, errmsg: cstring) -> T {
     return value
 }
 
-/*
-
-Usage:
-if t := getfield(L, -1, "dir"); try(L, t == .STRING) {
-
+subtable :: proc(L: State, idx: i32, name: cstring) -> bool {
+    using lua
+    t := cast(Type) getfield(L, idx, name)
+    if t == .NIL {
+        pop(L, 1)
+        return false
+    }
+    return true
 }
-
-Try pops a value from the stack if the condition is false
-It returns the condition
-*/
-// try :: proc(L: State, cond: bool) -> bool {
-//     if !cond {
-//         pop(L, 1)
-//     }
-//     return cond
-// }
-
-// lassert :: proc(L: State, cond: bool, msg: cstring) -> bool {
-//     if !cond {
-//         pop(L, 1)
-//         throw(L, msg)
-//     }
-//     return cond
-// }

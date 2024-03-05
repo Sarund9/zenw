@@ -9,9 +9,12 @@ import "core:fmt"
 import "core:c/libc"
 import str "core:strings"
 import fpath "core:path/filepath"
+import "core:text/match"
+import "core:time"
 
 gZenwModules := map[cstring]CFunc {
     "odin" = odin_load,
+    "filetrack" = filetrack_load,
 }
 
 odin_load :: proc "c" (L: State) -> i32 {
@@ -159,4 +162,208 @@ odin_load :: proc "c" (L: State) -> i32 {
 
     return 1
 }
+
+filetrack_load :: proc "c" (L: State) -> i32 {
+    
+    Tracker :: struct {
+        pattern, cachefile: string,
+        matcher: match.Matcher,
+        files: [dynamic]File,
+    }
+
+    File :: struct {
+        fullpath: string,
+        filetime, size,
+        hashcode: u64,
+    }
+
+    using lua
+    context = startfunc(L)
+
+    // Registry
+    newtable(L) // track
+    
+    // Metatable
+    {
+        newtable(L) 
+        defer setmetatable(L, -2)
+
+        // Constructor
+        defun(L, "__call", proc "c" (L: StateRef) -> i32 {
+            using lua
+            context = startfunc(L)
+
+            pattern := L_checkstring(L, 2)
+            file := L_checkstring(L, 3)
+
+            // Validate cache filepath
+            fullpath, ok := fpath.abs(auto_cast file, context.allocator)
+            if !ok {
+                pushfstring(L, "filetrack: invalid cache path: %s", file)
+                throw(L)
+            }
+            
+            log.warn("filetrack to", fullpath)
+
+            // Return userdata
+            data := newuserdatauv(L, size_of(Tracker), 0)
+            getfield(L, 1, "Tracker")
+            setmetatable(L, -2)
+
+            t := transmute(^Tracker) data
+            t.cachefile = fullpath
+            {
+                ptrn, err := str.clone_from_cstring(pattern)
+                if err != .None {
+                    throw(L, fmt.ctprintf("filetrack: failed to clone pattern string: {}", err))
+                }
+                t.pattern = ptrn
+            }
+            
+
+            return 1
+        })
+    }
+
+    // Class
+    {
+        newtable(L) 
+        defer setfield(L, -2, "Tracker")
+        /* Userdata class indexing:
+        methods:
+            returns lua function
+        properties:
+            calls function
+            A property is a table that contains:
+                __get or __set
+                expects
+                pushes value
+
+        Tracker:
+        any => len(files) > 0
+        new() {
+
+            return () {
+
+            }
+        }
+        */
+
+        pushvalue(L, -1) // Capture the class as an upvalue
+        defun(L, "__index", proc "c" (L: StateRef) -> i32 {
+            using lua
+            context = startfunc(L)
+            /* stack contains:
+               - Userdata
+               - String
+            */
+
+            L_checktype(L, 1, auto_cast Type.USERDATA)
+            key := L_checkstring(L, 2)
+            
+            log.warn("Indexing:", key)
+
+            class := upvalueindex(1)
+            
+            // Properties (getters)
+            if subtable(L, class, "__getters") {
+                t := cast(Type) getfield(L, -1, key)
+                if t == .FUNCTION {
+                    pushvalue(L, 1) // 1: Object Instance
+                    call(L, 1, 1) // Pops function and 1 from the stack, pushes result
+                    return 1    // Return result
+                }
+                pop(L, 1) // Pop '__getters' if not found
+            }
+
+            t := cast(Type) getfield(L, class, key)
+            // Methods
+            if t == .FUNCTION {
+                pushvalue(L, -1) // Upvalue 1: wrapping function
+                pushvalue(L, 1) // Upvalue 2: object instance
+
+                pushcclosure(L, proc "c" (L: StateRef) -> i32 {
+                    using lua
+                    argc := gettop(L)
+                    funcid := upvalueindex(1)
+                    pushvalue(L, funcid)
+                    insert(L, 1)
+
+                    selfid := upvalueindex(2)
+                    pushvalue(L, selfid)
+                    insert(L, 1)
+
+                    // Call the function, do not care about number of results
+                    top := gettop(L)
+                    call(L, argc + 1, MULTRET)
+                    return gettop(L) - top
+                }, 2)
+            }
+
+            // No members
+            pushfstring(L, "class Tracker: no member '%s'", key)
+            throw(L)
+            
+        }, 1)
+
+        // Getters
+        {
+            newtable(L)
+            defer setfield(L, -2, "__getters")
+            pushvalue(L, -2) // Capture the class as an upvalue
+            defun(L, "any", proc "c" (L: StateRef) -> i32 {
+                using lua
+                context = startfunc(L)
+                /* 1: Object instance */
+
+                // TODO: implement
+                log.error("Tracker.any not implemented")
+
+                pushboolean(L, false)
+                return 1
+            }, 1)
+        }
+
+        
+        
+        // TODO: Finalizer
+    }
+    
+
+    return 1
+}
+/*
+track = {
+    @ = {
+        __call(self, pattern, cachefile) {
+            / validate cachefile as valid file for the cache
+            / validate 
+            return userdata(track) {
+                ...
+            }
+        }
+    }
+    class = {
+        __index[class](self, value) {
+            return class[value]
+        }
+        save(self) {
+            data := parse_userdata()
+        }
+        any(self) {
+            return len(self.files) > 0
+        }
+    }
+    class_file = {
+        __index(self, value) {
+            @static offsets: map[cstring](uint, Type)
+            if value in offsets {
+                pushat(self[])
+            } else {
+                error ""
+            }
+        }
+    }
+}
+*/
 
