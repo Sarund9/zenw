@@ -12,16 +12,16 @@ end
 
 function build()
     local files = track('src/*.odin', 'test.cache')
-    local a = files.any
+    -- local a = files.any
 
-    print "Build!"
-    odin.build {
-        dir = 'src',
-        out = 'test',
-        mode = 'exe'
-    }
+    -- print "Build!"
+    -- odin.build {
+    --     dir = 'src',
+    --     out = 'test',
+    --     mode = 'exe'
+    -- }
 
-
+    files.save()
 end
 
 function build_shaders()

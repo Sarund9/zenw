@@ -167,8 +167,7 @@ filetrack_load :: proc "c" (L: State) -> i32 {
     
     Tracker :: struct {
         pattern, cachefile: string,
-        matcher: match.Matcher,
-        files: [dynamic]File,
+        added: [dynamic]File,
     }
 
     File :: struct {
@@ -203,23 +202,63 @@ filetrack_load :: proc "c" (L: State) -> i32 {
                 throw(L)
             }
             
-            log.warn("filetrack to", fullpath)
-
             // Return userdata
-            data := newuserdatauv(L, size_of(Tracker), 0)
+            this := transmute(^Tracker) newuserdatauv(L, size_of(Tracker), 0)
             getfield(L, 1, "Tracker")
             setmetatable(L, -2)
 
-            t := transmute(^Tracker) data
-            t.cachefile = fullpath
+            this.cachefile = fullpath
             {
                 ptrn, err := str.clone_from_cstring(pattern)
                 if err != .None {
                     throw(L, fmt.ctprintf("filetrack: failed to clone pattern string: {}", err))
                 }
-                t.pattern = ptrn
+                this.pattern = ptrn
             }
             
+            this.added = make([dynamic]File, 0, 16)
+            
+            /* Load the cache.
+            Load the cache into a hashtable: map[string]File
+            Find the 'directory' of the pattern to minimize number of files to check.
+            For each file in that directory:
+                Match to the pattern, continue if match is false.
+
+                Try to find it in the hashtable
+                If it isn't there:
+                    Add it to the added list and continue
+
+                Flag that hashtable item as 'found'
+
+                Get the file's time
+                If it's newer than in the hashtable:
+                    Add it to the added list and continue
+                
+                Get the file's size
+                If it's different from the hash
+                    Add it to the added list and continue
+
+                Hash the file's contents
+                If it's different from the hash
+                    Add it to the added list and continue
+            
+            For each file in the cache not in the directory:
+                Add it to the removed list
+
+            To save the cache:
+                Load the current cache
+            Iterate the added list:
+                Get each file's time, size, and hashcode, then update the hashtable
+            If the file-size is too large:
+                Iterate the deleted list from oldest to newest:
+                    Remove items from the hashtable until an optimal size is reached
+            
+            Save the hashtable to a file
+            / Note: the 'optimal' size should be a factor of how big is the deleted list compared to the added list.
+            If the file size is 20mb but the deleted list is only 10% of that size, the file size is not unoptimal.
+            This extra check should be ignored if the file-size will be less than 1MB
+            */
+
 
             return 1
         })
@@ -229,26 +268,7 @@ filetrack_load :: proc "c" (L: State) -> i32 {
     {
         newtable(L) 
         defer setfield(L, -2, "Tracker")
-        /* Userdata class indexing:
-        methods:
-            returns lua function
-        properties:
-            calls function
-            A property is a table that contains:
-                __get or __set
-                expects
-                pushes value
-
-        Tracker:
-        any => len(files) > 0
-        new() {
-
-            return () {
-
-            }
-        }
-        */
-
+        
         pushvalue(L, -1) // Capture the class as an upvalue
         defun(L, "__index", proc "c" (L: StateRef) -> i32 {
             using lua
@@ -261,8 +281,6 @@ filetrack_load :: proc "c" (L: State) -> i32 {
             L_checktype(L, 1, auto_cast Type.USERDATA)
             key := L_checkstring(L, 2)
             
-            log.warn("Indexing:", key)
-
             class := upvalueindex(1)
             
             // Properties (getters)
@@ -270,7 +288,9 @@ filetrack_load :: proc "c" (L: State) -> i32 {
                 t := cast(Type) getfield(L, -1, key)
                 if t == .FUNCTION {
                     pushvalue(L, 1) // 1: Object Instance
+                    top := gettop(L)
                     call(L, 1, 1) // Pops function and 1 from the stack, pushes result
+                    insert(L, 1); settop(L, 1)
                     return 1    // Return result
                 }
                 pop(L, 1) // Pop '__getters' if not found
@@ -284,13 +304,15 @@ filetrack_load :: proc "c" (L: State) -> i32 {
 
                 pushcclosure(L, proc "c" (L: StateRef) -> i32 {
                     using lua
+                    context = startfunc(L)
                     argc := gettop(L)
-                    funcid := upvalueindex(1)
-                    pushvalue(L, funcid)
+                    
+                    // Object Instance
+                    pushvalue(L, upvalueindex(2))
                     insert(L, 1)
 
-                    selfid := upvalueindex(2)
-                    pushvalue(L, selfid)
+                    // Wrapping Function
+                    pushvalue(L, upvalueindex(1))
                     insert(L, 1)
 
                     // Call the function, do not care about number of results
@@ -298,6 +320,8 @@ filetrack_load :: proc "c" (L: State) -> i32 {
                     call(L, argc + 1, MULTRET)
                     return gettop(L) - top
                 }, 2)
+                
+                return 1
             }
 
             // No members
@@ -324,13 +348,21 @@ filetrack_load :: proc "c" (L: State) -> i32 {
             }, 1)
         }
 
-        
+        // Save
+        defun(L, "save", proc "c" (L: StateRef) -> i32 {
+            using lua
+            context = startfunc(L)
+            /* 1: Object instance */
+
+            return 0
+        }, 0)
         
         // TODO: Finalizer
     }
     
 
     return 1
+
 }
 /*
 track = {
@@ -367,3 +399,88 @@ track = {
 }
 */
 
+
+file_load :: proc "c" (L: State) -> i32 {
+    
+    
+
+
+}
+
+/*
+Lua file writing
+
+local procs = assert(io.open('procs.odin', 'w'))
+local loader = assert(io.open('loader.odin', 'w'))
+local api = assert(io.open())
+
+
+io.close(procs)
+io.close(loader)
+io.close(api)
+
+
+--Better api (file)
+
+local file = require 'file'
+
+local procs = file.openwrite('procs.odin')
+local loader = file.openwrite('loader.odin')
+local api = file.openread('api.txt')
+
+procs.write [[package wgpu
+
+import "core:c"
+
+]]
+
+loader.write [[package wgpu
+
+import "core:c"
+import "core:dynlib"
+import "core:fmt"
+
+load_procs :: proc(dll: dynlib.Library) {
+    load :: proc(
+        dll: dynlib.Library,
+        name: string, ptr: ^$T,
+    ) {
+        adr, ok := dynlib.proc_adress(dll, name)
+        if !ok {
+            fmt.printerr("")
+        }
+        ptr^ = adr
+    }
+
+]]
+
+procs.writeln '}'
+procs.close()
+
+loader.writeln ''
+loader.close()
+
+--Impl:
+
+/ userdata is
+FileStream :: struct {
+    handle: os.Handle,
+    fullpath: cstring,
+}
+
+FileReader = {
+    readln(self) str { Reads until the next line end }
+    read(self, len) str
+    close(self)
+}
+
+FileWriter = {
+
+    write(self, str)
+    writeln(self, str)
+
+    close(self)
+}
+
+
+*/

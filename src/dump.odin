@@ -77,7 +77,7 @@ dumppair :: proc(L: ^lua.State, indent: int, watchdog: ^int) {
         } else {
             dumptable(L, -1, indent, watchdog)
         }
-    case: fmt.print(topointer(L, -1))
+    case: fmt.printf("{} ({})", topointer(L, -1), type(L, -1))
     }
 
 }
